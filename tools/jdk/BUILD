@@ -223,11 +223,11 @@ default_java_toolchain(
 
 default_java_toolchain(
     name = "toolchain_jdk9",
+    bootclasspath = [":bootclasspath"],
+    extclasspath = [":extclasspath"],
     jvm_opts = JDK9_JVM_OPTS,
-    misc = DEFAULT_JAVACOPTS + [
-        "--release",
-        "9",
-    ],
+    source_version = "8",
+    target_version = "8",
 )
 
 alias(
