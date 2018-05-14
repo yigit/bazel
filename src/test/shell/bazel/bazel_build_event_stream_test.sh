@@ -29,6 +29,7 @@ function set_up() {
   mkdir -p pkg
   touch remote_file
   cat > WORKSPACE <<EOF
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 http_file(name="remote", urls=["file://`pwd`/remote_file"])
 EOF
   cat > pkg/BUILD <<'EOF'
