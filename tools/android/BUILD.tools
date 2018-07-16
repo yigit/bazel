@@ -364,6 +364,12 @@ alias(
     actual = "//external:databinding_annotation_processor",
 )
 
+
+alias(
+    name = "databinding_exec",
+    actual = "//external:databinding_exec",
+)
+
 # This is the default value of databinding_annotation_processor if the user does
 # not provide one.
 filegroup(name = "empty")

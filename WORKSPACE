@@ -52,14 +52,14 @@ list_source_repository(name = "local_bazel_source_list")
 #   2. Set the $ANDROID_HOME and $ANDROID_NDK_HOME environment variables
 #   3. Uncomment the two lines below
 #
-# android_sdk_repository(name = "androidsdk")
-# android_ndk_repository(name = "androidndk")
+android_sdk_repository(name = "androidsdk")
+android_ndk_repository(name = "androidndk")
 
 # In order to run //src/test/shell/bazel:maven_skylark_test, follow the
 # instructions above for the Android integration tests and uncomment the
 # following lines:
-# load("//tools/build_defs/repo:maven_rules.bzl", "maven_dependency_plugin")
-# maven_dependency_plugin()
+load("//tools/build_defs/repo:maven_rules.bzl", "maven_dependency_plugin")
+maven_dependency_plugin()
 
 # This allows rules written in skylark to locate apple build tools.
 bind(

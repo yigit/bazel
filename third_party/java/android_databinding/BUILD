@@ -28,5 +28,11 @@ filegroup(
 # Executable for the databinding resource compiler.
 java_import(
     name = "exec",
-    jars = ["v2_3_1/exec.jar"],
+    jars = ["v3_2_0/exec.jar"],
+)
+
+java_binary(
+    main_class = "android.databinding.AndroidDataBinding",
+    name = "exec_binary",
+    runtime_deps = [":exec"]
 )

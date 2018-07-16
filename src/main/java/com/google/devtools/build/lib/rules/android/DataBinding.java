@@ -13,24 +13,45 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.android;
 
+import android.databinding.AndroidDataBinding;
+import android.databinding.cli.GenerateBaseClassesOptions;
+import android.databinding.tool.store.LayoutInfoInput.Args;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
+import com.google.common.io.Files;
+import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionEnvironment;
+import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.CommandLines;
+import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
+import com.google.devtools.build.lib.actions.ResourceSet;
+import com.google.devtools.build.lib.actions.RunfilesSupplier;
+import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction.Builder;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaPluginInfoProvider;
 import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
+import com.google.devtools.build.lib.rules.java.JavaToolchainProvider;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.ResourceFileLoader;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -64,12 +85,19 @@ public final class DataBinding {
   public static final String DATABINDING_ANNOTATION_PROCESSOR_ATTR =
       "$databinding_annotation_processor";
 
+  /** The rule attribute supplying data binding's build helper  (exec). */
+  public static final String DATABINDING_EXEC_PROCESSOR_ATTR =
+      "$databinding_exec";
+
   /**
    * Annotation processing creates the following metadata files that describe how data binding is
    * applied. The full file paths include prefixes as implemented in {@link #getMetadataOutputs}.
    */
   private static final ImmutableList<String> METADATA_OUTPUT_SUFFIXES =
       ImmutableList.<String>of("setter_store.bin", "layoutinfo.bin", "br.bin");
+
+  private static final ImmutableList<String> METADATA_CLASS_INFO_LOG_SUFFIXES =
+      ImmutableList.of(".json");
 
   /** The directory where the annotation processor looks for dep metadata. */
   private static final String DEP_METADATA_INPUT_DIR = "dependent-lib-artifacts";
@@ -136,6 +164,11 @@ public final class DataBinding {
     return getSuffixedInfoFile(context, "");
   }
 
+  static Artifact getClassInfoFile(ActionConstructionContext context) {
+    return context.getUniqueDirectoryArtifact(
+        "databinding-class-info", "class-info.zip");
+  }
+
   /** Gets a layout info file with the specified suffix (for use in having different outputs) */
   static Artifact getSuffixedInfoFile(ActionConstructionContext context, String suffix) {
     return context.getUniqueDirectoryArtifact(
@@ -198,6 +231,8 @@ public final class DataBinding {
     // addProcessorFlag(attributes, "enableDebugLogs", "1");
     // If enabled, produces cleaner output for Android Studio.
     flags.add(createProcessorFlag("printEncodedErrors", "0"));
+    flags.add(createProcessorFlag("enableV2", "1"));
+    flags.add(createProcessorFlag("classLogDir", getClassInfoFile(ruleContext).getExecPathString()));
     // Specifies whether the current rule is a test. Currently unused.
     //    addDataBindingProcessorFlag(attributes, "isTestVariant", "false");
     // Specifies that data binding is only used for test instrumentation. Currently unused.
@@ -230,6 +265,45 @@ public final class DataBinding {
     Artifact output = getDataBindingArtifact(ruleContext, "DataBindingInfo.java");
     ruleContext.registerAction(FileWriteAction.create(ruleContext, output, contents, false));
     return output;
+  }
+
+  static Artifact createBaseClasses(RuleContext ruleContext) {
+
+    Artifact layoutInfo = getLayoutInfoFile(ruleContext);
+    Artifact classInfoFile = getClassInfoFile(ruleContext);
+    Artifact srcOutFile = getDataBindingArtifact(ruleContext, "baseClassSrc.srcjar");
+    FilesToRunProvider exec = ruleContext
+        .getExecutablePrerequisite(DATABINDING_EXEC_PROCESSOR_ATTR, Mode.HOST);
+    if (exec == null) {
+      ruleContext.ruleError("must specify data binding exec artifact");
+    }
+    srcOutFile.getPath().getPathFile().mkdirs();
+    CustomCommandLine commandLine = CustomCommandLine.builder()
+        .addExecPath("-layoutInfoFiles", layoutInfo)
+        // TODO .addExecPath("-dependencyClassInfoList", )
+        .add("-package", AndroidCommon.getJavaPackage(ruleContext))
+        .addExecPath("-classInfoOut", classInfoFile)
+        .addExecPath("-sourceOut", srcOutFile)
+        .add("-zipSourceOutput", "true")
+        .add("-useAndroidX", "false")
+        .build();
+    Action[] action = new Builder()
+        .addInput(getLayoutInfoFile(ruleContext))
+        .addOutput(getClassInfoFile(ruleContext))
+        .addOutput(srcOutFile)
+        .addCommandLine(commandLine)
+        .setExecutable(exec).build(ruleContext);
+//
+//    GenerateBaseClassesOptions genBaseClassOptions = new GenerateBaseClassesOptions();
+//    genBaseClassOptions.classInfoOut = classInfoFile.getPath().getPathFile();
+//    genBaseClassOptions.layoutInfoFolder = layoutInfo.getPath().getPathFile();
+//    genBaseClassOptions.packageName = AndroidCommon.getJavaPackage(ruleContext);
+//    genBaseClassOptions.sourceFileOut = srcOutFile.getPath().getPathFile();
+//    genBaseClassOptions.setUseAndoirdX(false);
+//    AndroidDataBinding.generateBaseClasses(genBaseClassOptions);
+
+    ruleContext.registerAction(action);
+    return srcOutFile;
   }
 
   /**
@@ -312,6 +386,8 @@ public final class DataBinding {
   static ImmutableList<Artifact> processDeps(RuleContext ruleContext) {
     ImmutableList.Builder<Artifact> dataBindingJavaInputs = ImmutableList.<Artifact>builder();
     if (AndroidResources.definesAndroidResources(ruleContext.attributes())) {
+      // TODO need those
+      dataBindingJavaInputs.add(DataBinding.getClassInfoFile(ruleContext));
       dataBindingJavaInputs.add(DataBinding.getLayoutInfoFile(ruleContext));
     }
     for (Artifact dataBindingDepMetadata : getTransitiveMetadata(ruleContext, "deps")) {

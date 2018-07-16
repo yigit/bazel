@@ -182,7 +182,7 @@ public abstract class AndroidLibrary implements RuleConfiguredTargetFactory {
                     AndroidRuleClasses.ANDROID_PROCESSED_MANIFEST),
                 ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_RESOURCES_ZIP),
                 DataBinding.isEnabled(ruleContext)
-                    ? DataBinding.getLayoutInfoFile(ruleContext)
+                    ? DataBinding.getLayoutInfoFile(ruleContext) // TODO need class info there
                     : null);
       }
       if (ruleContext.hasErrors()) {
