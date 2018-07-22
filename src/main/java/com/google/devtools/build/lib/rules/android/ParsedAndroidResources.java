@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.android;
 
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.RuleErrorConsumer;
@@ -42,21 +43,33 @@ public class ParsedAndroidResources extends AndroidResources
 
     AndroidResourceParsingActionBuilder builder = new AndroidResourceParsingActionBuilder();
 
-    if (enableDataBinding && isAapt2) {
+    AndroidResources processedResources;
+    if (enableDataBinding) {
       // TODO(corysmith): Centralize the data binding processing and zipping into a single
       // action. Data binding processing needs to be triggered here as well as the merger to
       // avoid aapt2 from throwing an error during compilation.
-      builder.setDataBindingInfoZip(
-          DataBinding.getSuffixedInfoFile(dataContext.getActionConstructionContext(), "_unused"));
+//      builder.setDataBindingInfoZip(
+//          DataBinding.getLayoutInfoFile(dataContext.getActionConstructionContext()));
+      // TODO remove cast
+      try {
+        processedResources = DataBinding.processLayouts((RuleContext) dataContext.getActionConstructionContext(), resources);
+      } catch (RuleErrorException e) {
+        e.printStackTrace();
+        // TODO
+        processedResources = resources;
+      }
+    } else {
+      processedResources = resources;
     }
 
-    return builder
+    ParsedAndroidResources built = builder
         .setOutput(dataContext.createOutputArtifact(AndroidRuleClasses.ANDROID_MERGED_SYMBOLS))
         .setCompiledSymbolsOutput(
             isAapt2
                 ? dataContext.createOutputArtifact(AndroidRuleClasses.ANDROID_COMPILED_SYMBOLS)
                 : null)
-        .build(dataContext, resources, manifest);
+        .build(dataContext, processedResources, manifest);
+    return built;
   }
 
   public static ParsedAndroidResources of(

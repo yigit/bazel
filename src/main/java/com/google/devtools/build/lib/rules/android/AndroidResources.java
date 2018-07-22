@@ -436,7 +436,7 @@ public class AndroidResources {
       AndroidAaptVersion aaptVersion)
       throws InterruptedException {
     return parse(dataContext, manifest, enableDataBinding, aaptVersion)
-        .merge(dataContext, resourceDeps, enableDataBinding, aaptVersion)
+        .merge(dataContext, resourceDeps, false, aaptVersion)
         .validate(dataContext, aaptVersion);
   }
 

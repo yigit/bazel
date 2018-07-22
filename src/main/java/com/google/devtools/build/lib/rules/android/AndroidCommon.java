@@ -874,6 +874,10 @@ public class AndroidCommon {
       if (annotationFile != null) {
         srcs = ImmutableList.<Artifact>builder().addAll(srcs).add(annotationFile).build();
       }
+      Artifact classInfoSources = DataBinding.createBaseClasses(ruleContext);
+      if (classInfoSources != null) {
+        srcs = ImmutableList.<Artifact>builder().addAll(srcs).add(classInfoSources).build();
+      }
     }
 
     ImmutableList<TransitiveInfoCollection> compileDeps;

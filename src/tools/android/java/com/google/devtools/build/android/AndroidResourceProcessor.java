@@ -488,7 +488,7 @@ public class AndroidResourceProcessor {
       boolean shouldZipDataBindingInfo)
       throws IOException {
 
-    if (dataBindingInfoOut == null) {
+    if (true || dataBindingInfoOut == null) {
       return resourceDir;
     } else if (!Files.isDirectory(resourceDir)) {
       // No resources: no data binding needed. Create a dummy file to satisfy declared outputs.
@@ -515,25 +515,11 @@ public class AndroidResourceProcessor {
 
     ProcessXmlOptions options = new ProcessXmlOptions();
     options.setAppId(packagePath);
-    options.setLibrary(variantType == VariantType.LIBRARY);
     options.setResInput(resourceDir.toFile());
     options.setResOutput(processedResourceDir.toFile());
     options.setLayoutInfoOutput(dataBindingInfoOut.toFile());
     // Whether or not to aggregate data-bound .xml files into a single .zip.
     options.setZipLayoutInfo(shouldZipDataBindingInfo);
-
-    try {
-      Object minSdk = AndroidManifest.getMinSdkVersion(new FileWrapper(androidManifest.toFile()));
-      if (minSdk instanceof Integer) {
-        options.setMinSdk(((Integer) minSdk).intValue());
-      } else {
-        // TODO(bazel-team): Enforce the minimum SDK check.
-        options.setMinSdk(15);
-      }
-    } catch (XPathExpressionException | StreamException e) {
-      // TODO(bazel-team): Enforce the minimum SDK check.
-      options.setMinSdk(15);
-    }
 
     try {
       AndroidDataBinding.doRun(options);

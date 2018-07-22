@@ -14,15 +14,21 @@
 package com.google.devtools.build.lib.rules.android;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.SpawnAction.Builder;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaPluginInfoProvider;
 import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
@@ -32,6 +38,8 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Support logic for Bazel's <a
@@ -64,12 +72,16 @@ public final class DataBinding {
   public static final String DATABINDING_ANNOTATION_PROCESSOR_ATTR =
       "$databinding_annotation_processor";
 
+  /** The rule attribute supplying data binding's build helper  (exec). */
+  public static final String DATABINDING_EXEC_PROCESSOR_ATTR =
+      "$databinding_exec";
+
   /**
    * Annotation processing creates the following metadata files that describe how data binding is
    * applied. The full file paths include prefixes as implemented in {@link #getMetadataOutputs}.
    */
   private static final ImmutableList<String> METADATA_OUTPUT_SUFFIXES =
-      ImmutableList.<String>of("setter_store.bin", "layoutinfo.bin", "br.bin");
+      ImmutableList.<String>of("setter_store.bin", "br.bin");
 
   /** The directory where the annotation processor looks for dep metadata. */
   private static final String DEP_METADATA_INPUT_DIR = "dependent-lib-artifacts";
@@ -136,6 +148,15 @@ public final class DataBinding {
     return getSuffixedInfoFile(context, "");
   }
 
+  private static Artifact getStrippedLayoutOutputMapping(ActionConstructionContext context,
+      Artifact artifact) {
+    return context.getUniqueDirectoryArtifact("databinding-processed-layout", artifact.getRootRelativePathString());
+  }
+
+  static Artifact getClassInfoFile(ActionConstructionContext context) {
+    return context.getUniqueDirectoryArtifact("databinding-class-info", "class-info.zip");
+  }
+
   /** Gets a layout info file with the specified suffix (for use in having different outputs) */
   static Artifact getSuffixedInfoFile(ActionConstructionContext context, String suffix) {
     return context.getUniqueDirectoryArtifact(
@@ -185,9 +206,6 @@ public final class DataBinding {
     flags.add(createProcessorFlag("sdkDir", "/not/used"));
     // Whether the current rule is a library or binary.
     flags.add(createProcessorFlag("artifactType", isBinary ? "APPLICATION" : "LIBRARY"));
-    // The path where data binding's resource processor wrote its output (the data binding XML
-    // expressions). The annotation processor reads this file to translate that XML into Java.
-    flags.add(createProcessorFlag("xmlOutDir", getDataBindingExecPath(ruleContext).toString()));
     // Unused.
     flags.add(createProcessorFlag("exportClassListTo", "/tmp/exported_classes"));
     // The Java package for the current rule.
@@ -195,13 +213,27 @@ public final class DataBinding {
     // The minimum Android SDK compatible with this rule.
     flags.add(createProcessorFlag("minApi", "14")); // TODO(gregce): update this
     // If enabled, the annotation processor reports detailed output about its activities.
-    // addProcessorFlag(attributes, "enableDebugLogs", "1");
+    flags.add(createProcessorFlag("enableDebugLogs", "1"));
     // If enabled, produces cleaner output for Android Studio.
     flags.add(createProcessorFlag("printEncodedErrors", "0"));
     // Specifies whether the current rule is a test. Currently unused.
     //    addDataBindingProcessorFlag(attributes, "isTestVariant", "false");
     // Specifies that data binding is only used for test instrumentation. Currently unused.
     // addDataBindingProcessorFlag(attributes, "enableForTests", null);
+
+    // V2 flags
+    flags.add(createProcessorFlag("enableV2", "1"));
+
+    if (AndroidResources.definesAndroidResources(ruleContext.attributes())) {
+      flags.add(createProcessorFlag("classLogDir", getClassInfoFile(ruleContext).getExecPathString()));
+      // The path where data binding's resource processor wrote its output (the data binding XML
+      // expressions). The annotation processor reads this file to translate that XML into Java.
+      flags.add(createProcessorFlag("xmlOutDir", getLayoutInfoFile(ruleContext).getExecPathString()));
+    } else {
+      // send dummy files
+      flags.add(createProcessorFlag("classLogDir", "/tmp/no_resources"));
+      flags.add(createProcessorFlag("xmlOutDir", "/tmp/no_resources"));
+    }
     return flags.build();
   }
 
@@ -230,6 +262,133 @@ public final class DataBinding {
     Artifact output = getDataBindingArtifact(ruleContext, "DataBindingInfo.java");
     ruleContext.registerAction(FileWriteAction.create(ruleContext, output, contents, false));
     return output;
+  }
+
+  static Artifact createBaseClasses(RuleContext ruleContext) {
+    if (!AndroidResources.definesAndroidResources(ruleContext.attributes())) {
+      return null; // no resource, no base classes or class info
+    }
+    Artifact layoutInfo = getLayoutInfoFile(ruleContext);
+    Artifact classInfoFile = getClassInfoFile(ruleContext);
+    Artifact srcOutFile = getDataBindingArtifact(ruleContext, "baseClassSrc.srcjar");
+    FilesToRunProvider exec = ruleContext
+        .getExecutablePrerequisite(DATABINDING_EXEC_PROCESSOR_ATTR, Mode.HOST);
+    if (exec == null) {
+      ruleContext.ruleError("must specify data binding exec artifact");
+    }
+    srcOutFile.getPath().getPathFile().mkdirs();
+    CustomCommandLine commandLine = CustomCommandLine.builder()
+        .add("GEN_BASE_CLASSES")
+        .addExecPath("-layoutInfoFiles", layoutInfo)
+        // TODO .addExecPath("-dependencyClassInfoList", )
+        .add("-package", AndroidCommon.getJavaPackage(ruleContext))
+        .addExecPath("-classInfoOut", classInfoFile)
+        .addExecPath("-sourceOut", srcOutFile)
+        .add("-zipSourceOutput", "true")
+        .add("-useAndroidX", "false")
+        .build();
+    Action[] action = new Builder()
+        .setMnemonic("GenerateDataBindingBaseClasses")
+        .addInput(getLayoutInfoFile(ruleContext))
+        .addOutput(getClassInfoFile(ruleContext))
+        .addOutput(srcOutFile)
+        .addCommandLine(commandLine)
+        .setExecutable(exec).build(ruleContext);
+    ruleContext.registerAction(action);
+    return srcOutFile;
+  }
+
+  public static AndroidResources processLayouts(RuleContext ruleContext, AndroidResources resources)
+      throws RuleErrorException {
+    FilesToRunProvider exec = ruleContext
+        .getExecutablePrerequisite(DATABINDING_EXEC_PROCESSOR_ATTR, Mode.HOST);
+    if (exec == null) {
+      ruleContext.ruleError("must specify data binding exec artifact");
+    }
+    ImmutableList<Artifact> artifacts = resources.getResources();
+    if (artifacts.isEmpty()) {
+      return resources;
+    }
+    List<Artifact> toBeStripped = new ArrayList<>();
+    List<Artifact> strippedOut = new ArrayList<>();
+    List<Artifact> resultArtifacts = artifacts.stream().map(artifact -> {
+      if (artifact.getFilename().endsWith(".xml") && artifact.getPath().getParentDirectory().getBaseName().startsWith("layout")) {
+        Artifact out = getStrippedLayoutOutputMapping(ruleContext, artifact);
+        toBeStripped.add(artifact);
+        strippedOut.add(out);
+        return out;
+      } else {
+        return artifact;
+      }
+    }).collect(Collectors.toList());
+
+    String inArg = toBeStripped.stream()
+        .map(Artifact::getExecPathString)
+        .collect(Collectors.joining(","));
+    String outArg = strippedOut.stream()
+        .map(Artifact::getExecPathString)
+        .collect(Collectors.joining(","));
+
+    CustomCommandLine commandLine = CustomCommandLine.builder()
+        .add("DUMB")
+        .add("-resInputs", inArg)
+        .add("-resOutputs", outArg)
+        .add("-layoutInfoOutput", getLayoutInfoFile(ruleContext).getExecPathString())
+        .add("-package", AndroidCommon.getJavaPackage(ruleContext))
+        .add("-useAndroidX", "false")
+        .build();
+    Action[] action = new Builder()
+        .setMnemonic("CreateDataBindingLayoutInfo")
+        .addOutput(getLayoutInfoFile(ruleContext))
+        .addOutputs(strippedOut)
+        .addInputs(toBeStripped)
+        .addCommandLine(commandLine)
+        .setExecutable(exec).build(ruleContext);
+    ruleContext.registerAction(action);
+    return new AndroidResources(ImmutableList.copyOf(resultArtifacts),
+        AndroidResources.getResourceRoots(ruleContext, resultArtifacts, "resource_files"));
+  }
+
+  public static AndroidResources createInfoReal(RuleContext ruleContext, AndroidResources resources) {
+    Artifact layoutInfo = ruleContext.getUniqueDirectoryArtifact("databinding-unused-2", "layout-info.zip"); // todo use real one
+    FilesToRunProvider exec = ruleContext
+        .getExecutablePrerequisite(DATABINDING_EXEC_PROCESSOR_ATTR, Mode.HOST);
+    if (exec == null) {
+      ruleContext.ruleError("must specify data binding exec artifact");
+    }
+    ImmutableList<Artifact> artifacts = resources.getResources();
+    if (artifacts.isEmpty()) {
+      return resources;
+    }
+    List<Artifact> resultArtifacts = artifacts.stream().map(artifact -> {
+      if (artifact.getFilename().endsWith(".xml")) {
+        return getStrippedLayoutOutputMapping(ruleContext, artifact);
+      } else {
+        return artifact;
+      }
+    }).collect(Collectors.toList());
+
+    Artifact outArtifact = getStrippedLayoutOutputMapping(ruleContext,
+        artifacts.get(0));
+
+    CustomCommandLine commandLine = CustomCommandLine.builder()
+        .add("PROCESS")
+        .add("-package", AndroidCommon.getJavaPackage(ruleContext))
+        .addExecPath("-resInput", artifacts.get(0))//TODO
+        .addExecPath("-resOutput", outArtifact) // TODO
+        .addExecPath("-layoutInfoOutput", layoutInfo)
+        .add("-zipLayoutInfo", "1")
+        .add("-useAndroidX", "0")
+        .build();
+    Action[] action = new Builder()
+        .addOutput(outArtifact)
+        .addOutput(getLayoutInfoFile(ruleContext))
+        .addInput(artifacts.get(0))
+        .addCommandLine(commandLine)
+        .setExecutable(exec).build(ruleContext);
+    ruleContext.registerAction(action);
+    return new AndroidResources(ImmutableList.of(outArtifact),
+        ImmutableList.of(outArtifact.getExecPath()));
   }
 
   /**
@@ -313,6 +472,7 @@ public final class DataBinding {
     ImmutableList.Builder<Artifact> dataBindingJavaInputs = ImmutableList.<Artifact>builder();
     if (AndroidResources.definesAndroidResources(ruleContext.attributes())) {
       dataBindingJavaInputs.add(DataBinding.getLayoutInfoFile(ruleContext));
+      dataBindingJavaInputs.add(DataBinding.getClassInfoFile(ruleContext));
     }
     for (Artifact dataBindingDepMetadata : getTransitiveMetadata(ruleContext, "deps")) {
       dataBindingJavaInputs.add(

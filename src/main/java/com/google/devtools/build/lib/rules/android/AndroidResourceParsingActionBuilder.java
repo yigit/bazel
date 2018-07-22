@@ -74,7 +74,8 @@ public class AndroidResourceParsingActionBuilder {
   }
 
   public AndroidResourceParsingActionBuilder setDataBindingInfoZip(Artifact dataBindingInfoZip) {
-    this.dataBindingInfoZip = dataBindingInfoZip;
+    // TODO remove completely
+//    this.dataBindingInfoZip = dataBindingInfoZip;
     return this;
   }
 

@@ -700,19 +700,20 @@ public final class ApplicationManifest {
             .setOutput(resourceContainer.getSymbols())
             .setCompiledSymbolsOutput(resourceContainer.getCompiledSymbols());
 
-    if (dataBindingInfoZip != null && resourceContainer.getCompiledSymbols() != null) {
-      PathFragment unusedInfo = dataBindingInfoZip.getRootRelativePath();
-      // TODO(corysmith): Centralize the data binding processing and zipping into a single
-      // action. Data binding processing needs to be triggered here as well as the merger to
-      // avoid aapt2 from throwing an error during compilation.
-      parsingBuilder
-          .setDataBindingInfoZip(
-              ruleContext.getDerivedArtifact(
-                  unusedInfo.replaceName(unusedInfo.getBaseName() + "_unused.zip"),
-                  dataBindingInfoZip.getRoot()))
-          .setManifest(resourceContainer.getManifest())
-          .setJavaPackage(resourceContainer.getJavaPackage());
-    }
+    // TODO yboyar get rid of this?
+//    if (dataBindingInfoZip != null && resourceContainer.getCompiledSymbols() != null) {
+//      PathFragment unusedInfo = dataBindingInfoZip.getRootRelativePath();
+//      // TODO(corysmith): Centralize the data binding processing and zipping into a single
+//      // action. Data binding processing needs to be triggered here as well as the merger to
+//      // avoid aapt2 from throwing an error during compilation.
+//      parsingBuilder
+//          .setDataBindingInfoZip(
+//              ruleContext.getDerivedArtifact(
+//                  unusedInfo.replaceName(unusedInfo.getBaseName() + "_unused.zip"),
+//                  dataBindingInfoZip.getRoot()))
+//          .setManifest(resourceContainer.getManifest())
+//          .setJavaPackage(resourceContainer.getJavaPackage());
+//    }
     resourceContainer = parsingBuilder.buildAndUpdate(dataContext, resourceContainer);
 
     ResourceContainer merged =
